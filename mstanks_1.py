@@ -7,7 +7,8 @@ import binascii
 import struct
 import argparse
 import random
-
+from threading import Thread
+import atexit
 
 class ServerMessageTypes(object):
 	TEST = 0
@@ -155,11 +156,30 @@ class ServerComms(object):
 		return self.ServerSocket.sendall(message)
 
 
-class Bot:
+class Bot(Thread):
 	def __init__(self, hostname, port, team_name, index):
+		Thread.__init__(self)
 		self.name = "{}:{}".format(team_name, index)
 		self.GameServer = ServerComms(hostname, port)
 		self.GameServer.sendMessage(ServerMessageTypes.CREATETANK, {'Name': self.name})
+		self.is_running = True
+		self.is_watching = True
+		self.turrett_degree = 0
+
+	def run(self):
+		while self.is_running:
+			if random.randint(0, 10) > 2:
+				logging.debug("Bot {} is firing: ".format(self.name))
+				self.sendMessage(ServerMessageTypes.FIRE)
+			else:
+				logging.debug("Moving randomly")
+				self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': self.turrett_degree})
+				self.turrett_degree += 30
+
+
+	def kill(self):
+		self.is_running = False
+		
 	
 	def sendMessage(self, message=None, messagePayload=None):
 		"""Avoid using this unless for hardcoded messages"""
@@ -198,17 +218,15 @@ for i in range(4):
 
 # Main loop - read game messages, ignore them and randomly perform actions
 
-while True:
-	for bot in bots:
-		logging.info("Iterating on bot {}".format(bot.name))
-		# message = bot.readMessage()
+for bot in bots:
+	bot.start()
 
-		if random.randint(0, 10) > 5:
-			logging.info("Bot {} is firing: ".format(bot.name))
-			bot.sendMessage(ServerMessageTypes.FIRE)
-		else:
-			logging.info("Moving randomly")
-			bot.sendMessage(ServerMessageTypes.TURNTOHEADING, {'Amount': random.randint(0, 359)})
+
+def kill():
+	for bot in bots:
+		bot.kill()
+
+atexit.register(kill)
 
 #i=0
 #while True:

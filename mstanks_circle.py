@@ -12,7 +12,7 @@ import atexit
 import select
 import math
 import time
-from tools import gradient2deg
+from tools import rotate_head
 
 class ServerMessageTypes(object):
 	TEST = 0
@@ -205,22 +205,23 @@ class Bot(Thread):
 			message = self.readMessage()
 			field.update(message)
 
-			if time.time() - self.last_turret_update > 0.2:
-				self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': self.turret_degree + 30})
+			if time.time() - self.last_turret_update > 0.05:
+				self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': (self.turret_degree + 60) % 360})
 				self.last_turret_update = time.time()
-
 			if self.start_rotating:
-				degree = math.atan2(self.Y, self.X) * 180 / math.pi
-				degree = abs((360 - degree) % 360)
+				new_degree = rotate_head(self.X, self.Y, 0., 0.)
 				
-				logging.info("{} Getting close to the circle to degree {} ".format(self.name, degree))
-				#self.sendMessage(ServerMessageTypes.TURNTOHEADING, {'Amount': degree})
-				self.sendMessage(ServerMessageTypes.MOVEFORWARDDISTANCE, {'Amount': 5})
+				logging.info("{} Getting close to the circle to degree {} ".format(self.name, new_degree))
+				self.sendMessage(ServerMessageTypes.TURNTOHEADING, {'Amount': (-new_degree + 360) % 360})
+				self.sendMessage(ServerMessageTypes.TOGGLEFORWARD)
 				self.start_rotating = False
 				self.is_rotating = True
-			#if self.is_rotating:
-			#	if self.X**2 + self.Y**2 <= 400.:
-			#		self.sendMessage(ServerMessageTypes.STOPMOVE)
+
+			if self.is_rotating:
+				if self.X**2 + self.Y**2 <= 25**2.:
+					self.sendMessage(ServerMessageTypes.STOPMOVE)
+				#self.sendMessage(ServerMessageTypes.MOVEBACKWARSDISTANCE, {'Amount': 50})
+				#self.is_rotating = False
 
 	def update(self, X, Y, heading, turret_degree):
 		self.X = X

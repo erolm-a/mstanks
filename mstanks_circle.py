@@ -210,9 +210,11 @@ class Bot(Thread):
 			message = self.readMessage()
 			field.update(message)
 
-			if time.time() - self.last_turret_update > 0.05:
-				self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': (self.turret_degree + 60) % 360})
-				self.last_turret_update = time.time()
+			turret = 0
+			self.sendMessage(ServerMessageTypes.TOGGLETURRETRIGHT, {'Amount': turret})
+			turret = (turret + 60) % 360
+
+			self.last_turret_update = time.time()
 			if self.start_rotating:
 				new_degree = rotate_head(self.X, self.Y, 0., 0.)
 				
@@ -226,13 +228,13 @@ class Bot(Thread):
 				if self.X**2 + self.Y**2 <= 25**2.:
 					self.sendMessage(ServerMessageTypes.STOPMOVE)
 					self.rotateByDeg(90)
-					time.sleep(1)
+					time.sleep(1.3)
 					self.is_rotating = False
 					self.is_rotating_2 = True
 					self.toggleForward()
 
 			if self.is_rotating_2:
-				self.rotateByDeg(-9)
+				self.rotateByDeg(-10)
 		
 	def update(self, X, Y, heading, turret_degree):
 		self.X = X

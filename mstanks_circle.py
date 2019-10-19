@@ -11,6 +11,7 @@ from threading import Thread
 import atexit
 import select
 import math
+import time
 from tools import gradient2deg
 
 class ServerMessageTypes(object):
@@ -176,26 +177,45 @@ class Bot(Thread):
 		self.turret_degree = 0.
 		self.X = 0.
 		self.Y = 0.
+		self.last_X = 0.
+		self.last_Y = 0.
+		self.last_turret_update = time.time()
 
 
 	def run(self):
+		i = 0
+		while True:
+			if i % 5 == 0:
+				self.sendMessage(ServerMessageTypes.MOVEFORWARDDISTANCE, {'Amount': 5})
+				message = self.readMessage()
+				field.update(message)
+			if abs(self.last_X - self.X) > 1 and abs(self.last_Y - self.Y) > 1 and self.last_X != 0. and self.last_Y != 0.:
+				print("{} {} {}".format(self.name, self.last_X, self.X))
+				break
+			if i % 20 == 0:
+				self.last_X = self.X
+				self.last_Y = self.Y
+			
+			i += 1
+
+		print("Game has started")
+		self.sendMessage(ServerMessageTypes.STOPALL)
+
 		while self.is_running:
 			message = self.readMessage()
 			field.update(message)
-			#if random.randint(0, 10) > 2:
-			#	self.sendMessage(ServerMessageTypes.FIRE)
-			#else:
-			self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': self.turret_degree})
-			self.turret_degree += 30
+
+			if time.time() - self.last_turret_update > 0.2:
+				self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': self.turret_degree + 30})
+				self.last_turret_update = time.time()
+
 			if self.start_rotating:
 				degree = math.atan2(self.Y, self.X) * 180 / math.pi
-				degree += 180
-				if degree > 360:
-					degree -= 360
+				degree = abs((360 - degree) % 360)
 				
 				logging.info("{} Getting close to the circle to degree {} ".format(self.name, degree))
-				self.sendMessage(ServerMessageTypes.TURNTOHEADING, {'Amount': degree})
-				self.sendMessage(ServerMessageTypes.MOVEFORWARDDISTANCE, {'Amount': 1000})
+				#self.sendMessage(ServerMessageTypes.TURNTOHEADING, {'Amount': degree})
+				self.sendMessage(ServerMessageTypes.MOVEFORWARDDISTANCE, {'Amount': 5})
 				self.start_rotating = False
 				self.is_rotating = True
 			#if self.is_rotating:

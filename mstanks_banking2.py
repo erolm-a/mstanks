@@ -213,7 +213,7 @@ class Bot(Thread):
 			#logging.info(message)
 
 			if self.kill_ctr > 0: # TODO: change threshold
-				if abs(self.X) > 90 and abs(self.Y) < 30:
+				if abs(self.Y) > 95 and abs(self.X) < 20:
 					self.is_banking = False
 					logging.info("Banked")
 					self.kill_ctr = 0
@@ -235,9 +235,11 @@ class Bot(Thread):
 
 
 			if self.start_rotating:
-				new_degree = rotate_head(self.X, self.Y, 0., 0.)
+				new_degree = rotate_head(self.X, self.Y, (+1 if self.index & 1 else -1)*25.0/math.sqrt(2),
+														 (+1 if self.index & 2 else -1) *25.0/math.sqrt(2.0))
 				logging.info("{} going to the center".format(self.name))
-				self.rotateByDeg(- new_degree, absolute=True)
+
+				self.rotateByDeg(-new_degree, absolute=True)
 				self.sendMessage(ServerMessageTypes.TOGGLEFORWARD)
 				self.start_rotating = False
 				self.is_rotating = True
@@ -270,15 +272,10 @@ class Bot(Thread):
 				# Unhook for big distances
 				if dist > 60:
 					self.hooked = False
-				self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': (-new_degree + 360) % 360})
-
-				#self.stopMoving()
-				#self.keep_rotating = False
-				self.shoot()
-
-						#else:
-			#	self.hooked == False
-			#	self.start_rotating = True
+					
+				else:
+					self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': (-new_degree + 360) % 360})
+					self.shoot()
 
 			if self.ammo == 0:
 				if not self.hooked or self.hooked not in field.pickup:

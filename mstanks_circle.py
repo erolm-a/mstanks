@@ -10,6 +10,8 @@ import random
 from threading import Thread
 import atexit
 import select
+import math
+from tools import gradient2deg
 
 class ServerMessageTypes(object):
 	TEST = 0
@@ -168,26 +170,43 @@ class Bot(Thread):
 		self.GameServer.sendMessage(ServerMessageTypes.CREATETANK, {'Name': self.name})
 		self.is_running = True
 		self.is_watching = True
-		self.turrett_degree = 0
+		self.start_rotating = True
+		self.is_rotating = False
+		self.heading = 0.
+		self.turret_degree = 0.
 		self.X = 0.
 		self.Y = 0.
+
 
 	def run(self):
 		while self.is_running:
 			message = self.readMessage()
 			field.update(message)
-			print("{} {} {}".format(self.name, self.X, self.Y))
-			if random.randint(0, 10) > 2:
-				logging.debug("Bot {} is firing: ".format(self.name))
-				self.sendMessage(ServerMessageTypes.FIRE)
-			else:
-				logging.debug("Moving randomly")
-				self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': self.turrett_degree})
-				self.turrett_degree += 30
+			#if random.randint(0, 10) > 2:
+			#	self.sendMessage(ServerMessageTypes.FIRE)
+			#else:
+			self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': self.turret_degree})
+			self.turret_degree += 30
+			if self.start_rotating:
+				degree = math.atan2(self.Y, self.X) * 180 / math.pi
+				degree += 180
+				if degree > 360:
+					degree -= 360
+				
+				logging.info("{} Getting close to the circle to degree {} ".format(self.name, degree))
+				self.sendMessage(ServerMessageTypes.TURNTOHEADING, {'Amount': degree})
+				self.sendMessage(ServerMessageTypes.MOVEFORWARDDISTANCE, {'Amount': 1000})
+				self.start_rotating = False
+				self.is_rotating = True
+			#if self.is_rotating:
+			#	if self.X**2 + self.Y**2 <= 400.:
+			#		self.sendMessage(ServerMessageTypes.STOPMOVE)
 
-	def updatePosition(self, X, Y):
+	def update(self, X, Y, heading, turret_degree):
 		self.X = X
 		self.Y = Y
+		self.heading = heading
+		self.turret_degree = turret_degree
 
 
 	def kill(self):
@@ -220,14 +239,16 @@ class Field(Thread):
 
 	def update(self, event):
 		# Extract other tank/object positions
-		if event['messageType'] == 18:
+		if event['messageType'] == ServerMessageTypes.OBJECTUPDATE:
 			elem_id = event['Id']
 			if event['Type'] == 'Tank':
 				x, y = event['X'], event['Y']
 				# if it's a member of mine
 				if event['Name'].startswith(self.team_name):
 					tank_no = int(event['Name'][-1])
-					bots[tank_no].updatePosition(x, y)
+					heading = event['Heading']
+					turret_heading = event['TurretHeading']
+					bots[tank_no].update(x, y, heading, turret_heading)
 				else:
 					self.enemies[elem_id] = (x, y)
 

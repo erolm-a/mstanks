@@ -184,13 +184,15 @@ class Bot(Thread):
 		self.last_X = 0.
 		self.last_Y = 0.
 		self.kill_ctr = 0
-		self.hooked = False
+		self.hooked = None
 		self.is_banking = False
+		self.pickup_object = None
+		self.respawn = True
 
 
 	def run(self):
 		i = 0
-		while True:
+		while self.respawn:
 			if i % 5 == 0:
 				self.sendMessage(ServerMessageTypes.MOVEFORWARDDISTANCE, {'Amount': 5})
 				message = self.readMessage()
@@ -198,6 +200,8 @@ class Bot(Thread):
 				field.update(message, self.index)
 			if abs(self.last_X - self.X) > 1 and abs(self.last_Y - self.Y) > 1 and self.last_X != 0. and self.last_Y != 0.:
 				print("{} {} {}".format(self.name, self.last_X, self.X))
+				self.respawn = False
+				self.start_rotating = True
 				break
 			if i % 20 == 0:
 				self.last_X = self.X
@@ -210,6 +214,7 @@ class Bot(Thread):
 		while self.is_running:
 			message = self.readMessage()
 			field.update(message, self.index)
+			self.updateHook()
 			#logging.info(message)
 
 			if self.kill_ctr > 0: # TODO: change threshold
@@ -225,7 +230,6 @@ class Bot(Thread):
 						self.stopAll()
 						self.is_banking = True
 						self.stopRotationStrategy()
-						self.hooked = False
 						destination = min([(0, -100), (0, 100)], key=lambda x: distance(self.X, self.Y, x[0], x[1]))
 						degree = rotate_head(self.X, self.Y, destination[0], destination[1])
 						logging.info("{} {}".format(self.name, destination))
@@ -254,54 +258,42 @@ class Bot(Thread):
 
 			if self.keep_rotating:
 				logging.info("{} Rotating".format(self.name))
-				self.rotateByDeg(-10)
+				#self.rotateByDeg(-10)
+				self.goCircle(self.index)
 
 			if not self.hooked:
-				turret = 0
-				self.sendMessage(ServerMessageTypes.TOGGLETURRETRIGHT, {'Amount': turret})
-				turret = (turret + 60) % 360
+				self.radarTurret()
 				if len(field.enemies) and self.ammo:
-					to_hook = random.choice(list(field.enemies.keys()))
-					dist = distance(self.X, self.Y, field.enemies[to_hook][0], field.enemies[to_hook][1])
-					if dist < 60:
-						self.hooked = to_hook
+					closest_enemy = min(field.enemies.keys(), key=lambda x: distance(self.X, self.Y, field.enemies[x][0], field.enemies[x][1]))
+					# hook if distance < 60
+					if distance(self.X, self.Y, field.enemies[closest_enemy][0], field.enemies[closest_enemy][1]) < 80:
+						self.hookTo(closest_enemy)
 						logging.info("{} hooked!".format(self.name))
 
 			if self.hooked in field.enemies:
 				x_enemy, y_enemy = field.enemies[self.hooked]
-				new_degree  = rotate_head(self.X, self.Y, x_enemy, y_enemy)
-				dist = distance(self.X, self.Y, x_enemy, y_enemy)
-
 				# Unhook for big distances
-				if dist > 60:
-					self.hooked = None
-					logging.info("Unhooked!")
-					
+				if distance(self.X, self.Y, x_enemy, y_enemy) > 60:
+					self.unhook()
 				else:
-					self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': (-new_degree + 360) % 360})
 					self.shoot()
 
 			if self.ammo == 0:
-				if not self.hooked or self.hooked not in field.pickup:
-					self.hooked = None
-					logging.info("Unhooked!")
-					ammo_pickups = list(filter(lambda x: x[0] == 'Ammo', field.pickup))
-					if len(ammo_pickups) > 0:
+				if not self.pickup_object or self.pickup_object not in field.ammo_pickups:
+					self.pickup_object = None
+					if len(field.ammo_pickups) > 0:
 						self.stopRotationStrategy()
-						self.hooked = min(ammo_pickups, key=lambda x: (x[1] - self.X)**2 + (x[2] - self.Y) ** 2)
-						logging.info("Found available ammo: {} {}".format(self.hooked[1], self.hooked[2]))
-						#self.rotateByDeg(hooked_deg)
-						self.stopMoving()
-						self.toggleForward()
-				else:
-					hooked_deg = rotate_head(self.X, self.Y, self.hooked[1], self.hooked[2])
-					self.rotateByDeg((-hooked_deg + 360) % 360, absolute=True)
+						closest_ammo_pickup = min(field.ammo_pickups, key=lambda x: distance(self.X, self.Y, x[0], x[1]))
+						logging.info("Found available ammo: {}".format(closest_ammo_pickup))
+						self.pickup(closest_ammo_pickup)
 
 	def reset(self):
 		self.stopRotationStrategy()
 		self.start_rotating = False
 		self.is_banking = False
-		self.hooked = False
+		self.pickup_object = None
+		self.respawn = True
+		self.hooked = None
 
 	def update(self, X, Y, heading, turret_degree, health, ammo):
 		self.X = X
@@ -319,11 +311,25 @@ class Bot(Thread):
 			degree = self.heading - degree
 		self.sendMessage(ServerMessageTypes.TURNTOHEADING, {'Amount': degree % 360})
 
+	def goCircle(self, index, radius = 40, speed = 1):
+		targetX, targetY = self.getOffsetInAngle(0, 0, radius, (time.time() * 10*speed + index*90) % 360)
+		new_degree = rotate_head(self.X, self.Y, targetX, targetY)
+		self.rotateByDeg(-new_degree, absolute=True)
+
+	def getOffsetInAngle(self, baseX, baseY, radius, angle):
+		rangle = angle / 180 * math.pi
+		offsetX = math.sin(rangle) * radius
+		offsetY = -math.cos(rangle) * radius
+		return (baseX + offsetX, baseY + offsetY)
+
 	def toggleForward(self):
 		self.sendMessage(ServerMessageTypes.TOGGLEFORWARD)
 
 	def stopMoving(self):
 		self.sendMessage(ServerMessageTypes.STOPMOVE)
+
+	def stopTurret(self):
+		self.sendMessage(ServerMessageTypes.STOPTURRET)
 
 	def stopRotationStrategy(self):
 		self.is_rotating = False
@@ -338,6 +344,20 @@ class Bot(Thread):
 
 	def moveForward(self, amount):
 		self.sendMessage(ServerMessageTypes.MOVEFORWARDDISTANCE, {'Amount': amount})
+
+	def moveTo(self, new_x, new_y):
+		degree = rotate_head(self.X, self.Y, new_x, new_y)
+		dist = distance(self.X, self.Y, new_x, new_y)
+		self.rotateByDeg(-degree, absolute=True)
+		self.moveForward(dist)
+
+	def rotateTurretByDeg(self, degree, absolute=False):
+		if not absolute:
+			degree = self.heading - degree
+		self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': degree % 360})
+
+	def radarTurret(self):
+		self.sendMessage(ServerMessageTypes.TOGGLETURRETLEFT, {'Amount': (self.turret_degree + 60) % 360})
 	
 	def sendMessage(self, message=None, messagePayload=None):
 		"""Avoid using this unless for hardcoded messages"""
@@ -347,6 +367,25 @@ class Bot(Thread):
 		"""Avoid calling this method directly"""
 		return self.GameServer.readMessage()
 
+	def hookTo(self, obj):
+		self.stopTurret()
+		self.hooked = obj
+		self.updateHook()
+
+	def updateHook(self):
+		if self.hooked:
+			x_coord, y_coord = field.enemies[self.hooked]
+			self.rotateTurretByDeg(-rotate_head(self.X, self.Y, x_coord, y_coord), absolute=True)
+
+	def unhook(self):
+		self.hooked = None
+		self.radarTurret()
+
+	def	pickup(self, obj):
+		self.pickup_object = obj
+		self.radarTurret()
+		self.moveTo(obj[0], obj[1])
+
 
 class Field(Thread):
 	def __init__(self, team_name):
@@ -354,7 +393,8 @@ class Field(Thread):
 		self.team_name = team_name
 		self.enemies = {}
 		self.snitch = None
-		self.pickup = []
+		self.ammo_pickups = []
+		self.health_pickups = []
 		self.is_running = True
 
 	def run(self):
@@ -382,24 +422,24 @@ class Field(Thread):
 				else:
 					self.enemies[elem_id] = (x, y)
 			elif event['Type'] == 'HealthPickup':
-				self.pickup.append(('Health', event['X'], event['Y']))
+				self.health_pickups.append((event['X'], event['Y']))
 
 			elif event['Type'] == 'AmmoPickup':
-				self.pickup.append(('Ammo', event['X'], event['Y']))
+				self.ammo_pickups.append((event['X'], event['Y']))
 
 		elif messageType == ServerMessageTypes.AMMOPICKUP:
 			logging.info("Grabbed object")
 			for bot in bots:
 				to_delete_pickups = []
-				for p in filter(lambda x: x[0] == 'Ammo', self.pickup):
+				for p in filter(lambda x: x[0] == 'Ammo', self.ammo_pickups):
 					if math.hypot(bot.X - p[1], bot.Y - p[2]) < 10:
 						to_delete_pickups.append(p)
-						bot.hooked = None
+						bot.unhook()
 						bot.stopAll()
 						bot.start_rotating = True
 
 				for to_delete in to_delete_pickups:
-					self.pickup.remove(to_delete)
+					self.ammo_pickups.remove(to_delete)
 
 		elif messageType == ServerMessageTypes.KILL:
 			bots[index].kill_ctr += 1

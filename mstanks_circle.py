@@ -163,6 +163,8 @@ class ServerComms(object):
 			return self.ServerSocket.sendall(message)
 
 
+
+
 class Bot(Thread):
 	def __init__(self, hostname, port, team_name, index):
 		Thread.__init__(self)
@@ -173,8 +175,11 @@ class Bot(Thread):
 		self.is_watching = True
 		self.start_rotating = True
 		self.is_rotating = False
+		self.is_rotating_2 = False
 		self.heading = 0.
 		self.turret_degree = 0.
+		self.ammo = 0
+		self.health = 0
 		self.X = 0.
 		self.Y = 0.
 		self.last_X = 0.
@@ -220,18 +225,35 @@ class Bot(Thread):
 			if self.is_rotating:
 				if self.X**2 + self.Y**2 <= 25**2.:
 					self.sendMessage(ServerMessageTypes.STOPMOVE)
-				#self.sendMessage(ServerMessageTypes.MOVEBACKWARSDISTANCE, {'Amount': 50})
-				#self.is_rotating = False
+					self.rotateByDeg(90)
+					time.sleep(1)
+					self.is_rotating = False
+					self.is_rotating_2 = True
+					self.toggleForward()
 
+			if self.is_rotating_2:
+				self.rotateByDeg(-9)
+		
 	def update(self, X, Y, heading, turret_degree):
 		self.X = X
 		self.Y = Y
 		self.heading = heading
 		self.turret_degree = turret_degree
 
-
 	def kill(self):
 		self.is_running = False
+
+	def rotateByDeg(self, degree):
+		self.sendMessage(ServerMessageTypes.TURNTOHEADING, {'Amount': (self.heading - degree) % 360})
+
+	def toggleForward(self):
+		self.sendMessage(ServerMessageTypes.TOGGLEFORWARD)
+
+	def stopMoving(self):
+		self.sendMessage(ServerMessageTypes.STOPMOVE)
+
+	def stopAll(self):
+		self.sendMessage(ServerMessageTypes.STOPALL)
 	
 	def sendMessage(self, message=None, messagePayload=None):
 		"""Avoid using this unless for hardcoded messages"""

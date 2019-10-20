@@ -165,8 +165,8 @@ class Bot(Thread):
     SPAWNED = 0
     CIRCLE = 1
     AMMO_PICKUP = 3
-    SNITCH_KILL = 4
-    BANKING = 5
+    BANKING = 4
+    SNITCH_KILL = 5
 
     RADAR = 10
     HOOKED_ENEMY = 11
@@ -191,7 +191,7 @@ class Bot(Thread):
         self.last_Y = 0.
         self.heading = 0.
         self.turret_heading = 0.
-        self.ammo = 0
+        self.ammo = 10
         self.health = 3
         self.expected_heading = None
         self.kill_counter = 0
@@ -247,7 +247,10 @@ class Bot(Thread):
                 self.goCircle()
             
         if self.state == Bot.AMMO_PICKUP:
-            self.moveTo(self.hooked_objective[0], self.hooked_objective[1])
+            if self.hooked_objective and type(self.hooked_objective) == type(tuple()):
+                self.moveTo(self.hooked_objective[0], self.hooked_objective[1])
+            else:
+                self.state = Bot.CIRCLE
         
         if self.kill_counter > 0: # TODO: change this
             self.state = Bot.BANKING
@@ -261,37 +264,52 @@ class Bot(Thread):
     def execute_next_turret(self):
         if self.state == Bot.SPAWNED:
             return
+        
+        logging.info("Turret state {}".format(self.hookup_state))
+        logging.info("No of ammos: {}".format(self.ammo))
 
         if self.hookup_state == Bot.RADAR:
             self.radarTurret()
 
-            if self.ammo == 0 and len(field.ammo_pickups) > 0 and self.hooked_objective == None and self.state != Bot.AMMO_PICKUP:
+
+            if self.ammo == 0:
                 logging.info("Run out of ammo")
-                closest_ammo = min(field.ammo_pickups, key=lambda x: distance(self.X, self.Y, x[0], x[1]))
-                self.hooked_objective = closest_ammo
-                self.state = Bot.AMMO_PICKUP
-            
+                if self.hooked_objective == None and len(field.ammo_pickups) and self.state != Bot.AMMO_PICKUP:
+                    closest_ammo = min(field.ammo_pickups, key=lambda x: distance(self.X, self.Y, x[0], x[1]))
+                    logging.info("Found this ammo: {}".format(closest_ammo))
+                    self.hooked_objective = closest_ammo
+                    self.state = Bot.AMMO_PICKUP
+                elif self.hooked_objective != None and self.hooked_objective not in field.ammo_pickups:
+                    logging.info("Unexisting ammo, unhooking")
+                    self.hooked_objective = None
+                    self.unhook()
+
+
             if self.ammo > 0:
-                if self.hooked_objective == None and len(field.enemies):
+                logging.info("There are {} known enemies. My hooked object is {}".format(len(field.enemies), self.hooked_objective))
+                if len(field.enemies):
+                    logging.info("Looking for an enemy...")
                     closest_enemy = min(field.enemies.keys(), key=lambda x: distance(self.X, self.Y, field.enemies[x][0], field.enemies[x][1]))
-                    x_enemy, y_enemy = field.enemies[closest_enemy]
-                    if distance(self.X, self.Y, x_enemy, y_enemy) < 80:
+                    x_enemy, y_enemy, last_time = field.enemies[closest_enemy]
+                    if distance(self.X, self.Y, x_enemy, y_enemy):
                         logging.info("Hooked an enemy! {}".format(closest_enemy))
                         self.hooked_objective = closest_enemy
                         self.hookup_state = Bot.HOOKED_ENEMY
+            
 
         if self.hookup_state == Bot.HOOKED_ENEMY:
             if self.ammo == 0:
-                self.hookup_state = Bot.RADAR
-                self.hooked_objective = None
+                self.unhook()
             else:
-                x_enemy, y_enemy = field.enemies[self.hooked_objective]
-                if distance(self.X, self.Y, x_enemy, y_enemy) > 80:
-                    self.hookup_state = Bot.RADAR
-                    self.hooked_objective = None
+                if self.hooked_objective == None or self.hooked_objective not in field.enemies:
+                    self.unhook()
                 else:
-                    self.rotateTurretTo(x_enemy, y_enemy)
-                    self.shoot()
+                    x_enemy, y_enemy, last_time = field.enemies[self.hooked_objective]
+                    if distance(self.X, self.Y, x_enemy, y_enemy) > 80:
+                        self.unhook()
+                    else:
+                        self.rotateTurretTo(x_enemy, y_enemy)
+                        self.shoot()
                 
 
 
@@ -341,8 +359,10 @@ class Bot(Thread):
         logging.info(self.state)
         self.state = newState
         logging.info(self.state)
-
-
+    
+    def unhook(self):
+        self.hooked_objective = None
+        self.hookup_state = Bot.RADAR
         
        
 class Field(Thread):
@@ -357,7 +377,16 @@ class Field(Thread):
 
     def run(self):
         while self.is_running:
-            pass
+            time.sleep(1)
+            to_delete = []
+            for enemy in self.enemies:
+                if time.time() - self.enemies[enemy][2] > 3:
+                    to_delete.append(enemy)
+            for x in to_delete:
+                del self.enemies[x]
+            to_delete.clear()
+            
+            self.ammo_pickups = list(filter(lambda x: time.time() - x[2] <= 15, self.ammo_pickups))
 
     def kill(self):
         self.is_running = False
@@ -368,21 +397,25 @@ class Field(Thread):
             elem_id = event['Id']
             if event['Type'] == 'Tank':
                 x, y = event['X'], event['Y']
+                heading = event['Heading']
+                turret_heading = event['TurretHeading']
+                health = event['Health']
+                ammo = event['Ammo']
+
                 # if it's a member of mine
                 if event['Name'].startswith(self.team_name):
                     tank_no = int(event['Name'][-1])
-                    heading = event['Heading']
-                    turret_heading = event['TurretHeading']
-                    health = event['Health']
-                    ammo = event['Ammo']
                     bots[tank_no].update(x, y, heading, turret_heading, health, ammo)
                 else:
-                    self.enemies[elem_id] = (x, y)
+                    if health == 0 and elem_id in self.enemies:
+                        del self.enemies[elem_id]
+                    else:
+                        self.enemies[elem_id] = (x, y, time.time())
             elif event['Type'] == 'HealthPickup':
-                self.health_pickups.append((event['X'], event['Y']))
+                self.health_pickups.append((event['X'], event['Y'], time.time()))
 
             elif event['Type'] == 'AmmoPickup':
-                self.ammo_pickups.append((event['X'], event['Y']))
+                self.ammo_pickups.append((event['X'], event['Y'], time.time()))
 
         elif messageType == ServerMessageTypes.AMMOPICKUP:
             logging.info("Grabbed object")
@@ -403,6 +436,8 @@ class Field(Thread):
             bots[index].kill_counter = 0
 
         elif messageType == ServerMessageTypes.KILL:
+            self.enemies.clear()
+            bots[index].unhook()
             bots[index].kill_counter += 1
 
         elif messageType == ServerMessageTypes.HITDETECTED:
@@ -437,7 +472,7 @@ field = Field(args.name)
 field.start()
 
 bots = []
-for i in range(4):
+for i in range(1):
     bots.append(Bot(args.hostname, args.port, args.name, i))
 
 # Main loop - read game messages, ignore them and randomly perform actions

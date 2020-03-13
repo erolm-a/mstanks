@@ -162,14 +162,15 @@ class ServerComms(object):
             return self.ServerSocket.sendall(message)
 
 class Bot(Thread):
-    SPAWNED = 0
     CIRCLE = 1
-    AMMO_PICKUP = 3
-    BANKING = 4
+    AMMO_PICKUP = 2
+    BANKING = 3
+    SEEK_SNITCH = 4
     SNITCH_KILL = 5
 
     RADAR = 10
     HOOKED_ENEMY = 11
+    HOOKED_SNITCH = 12
 
     def __init__(self, hostname, port, team_name, index):
         Thread.__init__(self)
@@ -181,7 +182,7 @@ class Bot(Thread):
     
     def reset(self):
         self.is_alive = True
-        self.state = Bot.SPAWNED
+        self.state = Bot.CIRCLE
         self.hookup_state = Bot.RADAR
         self.hooked_objective = None
         self.i = 0.
@@ -222,23 +223,8 @@ class Bot(Thread):
         message = self.readMessage()
         field.update(message, self.index)
 
-        logging.info("I am in state {}".format(self.state))
+        logging.debug("{} I am in state {}".format(self.name, self.state))
 
-        if self.state == Bot.SPAWNED:
-            self.moveForward(5)
-            message = self.readMessage()
-            field.update(message, self.index)
-
-            logging.info("{} {} {} {}".format(self.last_X, self.X, self.last_Y, self.Y))
-
-            if math.fabs(self.last_X - self.X) > 1 and math.fabs(self.last_Y - self.Y) > 1 and self.last_X*self.last_Y != 0:
-                self.state = Bot.CIRCLE
-                return
-
-            if self.i % 5 == 0:
-                self.last_X = self.X
-                self.last_Y = self.Y
-        
         if self.state == Bot.CIRCLE:
             if self.X**2 + self.Y**2 >= 40**2:
                 logging.info("Moving to the centre")
@@ -255,22 +241,30 @@ class Bot(Thread):
         if self.kill_counter > 0: # TODO: change this
             self.state = Bot.BANKING
 
+        if self.state == Bot.SEEK_SNITCH:
+            self.hookup_state = Bot.HOOKED_SNITCH
+            if field.snitch:
+                self.moveTo(field.snitch[0], field.snitch[1])
+
         if self.state == Bot.BANKING:
             goal_posts = [(0, 100), (0, -100)]
             closest_goal_post = min(goal_posts, key=lambda post: distance(self.X, self.Y, post[0], post[1]))
             self.moveTo(closest_goal_post[0], closest_goal_post[1])
+
+        if self.state == Bot.SNITCH_KILL and self.hooked_objective:
+            self.moveTo(self.hooked_objective[0], self.hooked_objective[1], -20)
+
         self.i += 1
     
     def execute_next_turret(self):
-        if self.state == Bot.SPAWNED:
-            return
-        
         logging.info("Turret state {}".format(self.hookup_state))
         logging.info("No of ammos: {}".format(self.ammo))
 
         if self.hookup_state == Bot.RADAR:
             self.radarTurret()
 
+            if self.state != Bot.CIRCLE:
+                return
 
             if self.ammo == 0:
                 logging.info("Run out of ammo")
@@ -284,7 +278,6 @@ class Bot(Thread):
                     self.hooked_objective = None
                     self.unhook()
 
-
             if self.ammo > 0:
                 logging.info("There are {} known enemies. My hooked object is {}".format(len(field.enemies), self.hooked_objective))
                 if len(field.enemies):
@@ -295,7 +288,6 @@ class Bot(Thread):
                         logging.info("Hooked an enemy! {}".format(closest_enemy))
                         self.hooked_objective = closest_enemy
                         self.hookup_state = Bot.HOOKED_ENEMY
-            
 
         if self.hookup_state == Bot.HOOKED_ENEMY:
             if self.ammo == 0:
@@ -310,9 +302,15 @@ class Bot(Thread):
                     else:
                         self.rotateTurretTo(x_enemy, y_enemy)
                         self.shoot()
+        
+        if self.hookup_state == Bot.HOOKED_SNITCH:
+            if field.snitch:
+                self.hooked_objective = field.snitch
+                x_enemy, y_enemy = field.snitch
+                self.rotateTurretTo(x_enemy, y_enemy)
+            else:
+                self.radarTurret()
                 
-
-
     def moveTo(self, new_x, new_y, offset = 0):
         dist = distance(self.X, self.Y, new_x, new_y) + offset
         degree = rotate_head(self.X, self.Y, new_x, new_y)
@@ -363,6 +361,15 @@ class Bot(Thread):
     def unhook(self):
         self.hooked_objective = None
         self.hookup_state = Bot.RADAR
+    
+    def snitchSeeker(self, carrier):
+        self.hookup_state = Bot.HOOKED_ENEMY
+        self.state = Bot.SNITCH_KILL
+        self.hooked_objective = carrier
+    
+    def goBanking(self):
+        self.unhook()
+        self.changeState(Bot.BANKING)
         
        
 class Field(Thread):
@@ -406,6 +413,7 @@ class Field(Thread):
                 if event['Name'].startswith(self.team_name):
                     tank_no = int(event['Name'][-1])
                     bots[tank_no].update(x, y, heading, turret_heading, health, ammo)
+                    id2bot_no[elem_id] = tank_no
                 else:
                     if health == 0 and elem_id in self.enemies:
                         del self.enemies[elem_id]
@@ -416,6 +424,8 @@ class Field(Thread):
 
             elif event['Type'] == 'AmmoPickup':
                 self.ammo_pickups.append((event['X'], event['Y'], time.time()))
+            elif event['Type'] == 'Snitch':
+                self.snitch = (event['X'], event['Y'])
 
         elif messageType == ServerMessageTypes.AMMOPICKUP:
             logging.info("Grabbed object")
@@ -430,10 +440,29 @@ class Field(Thread):
 
             for to_delete in to_delete_pickups:
                 self.ammo_pickups.remove(to_delete)
+        
+        elif messageType == ServerMessageTypes.SNITCHPICKUP:
+            carrier = event['Id']
+            # if I know this enemy then assign this task to the 2 closest bots
+            if carrier in self.enemies:
+                carrier_data = self.enemies[carrier]
+                seekers = bots.sort(key=lambda x: math.hypot(x.X, x.Y, carrier_data[0], carrier_data[1]))
+                seekers[0].snitchSeeker(carrier)
+                seekers[1].snitchSeeker(carrier)
+            
+            else:
+                carrier_bot = id2bot_no[carrier]
+                bots[carrier_bot].goBanking()
+
 
         elif messageType == ServerMessageTypes.ENTEREDGOAL:
             bots[index].changeState(Bot.CIRCLE)
             bots[index].kill_counter = 0
+
+        elif messageType == ServerMessageTypes.SNITCHAPPEARED:
+            best_healthy_bots = sorted(bots, key=lambda x: x.health, reverse=True)
+            best_healthy_bots[0].changeState(Bot.SEEK_SNITCH)
+            best_healthy_bots[1].changeState(Bot.SEEK_SNITCH)
 
         elif messageType == ServerMessageTypes.KILL:
             self.enemies.clear()
@@ -472,7 +501,9 @@ field = Field(args.name)
 field.start()
 
 bots = []
-for i in range(1):
+id2bot_no = {}
+
+for i in range(4):
     bots.append(Bot(args.hostname, args.port, args.name, i))
 
 # Main loop - read game messages, ignore them and randomly perform actions

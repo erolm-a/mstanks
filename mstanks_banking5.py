@@ -11,7 +11,7 @@ import atexit
 import math
 import time
 import random
-from tools import rotate_head, distance
+from tools import rotate_head, distance, deg2rad
 
 
 class ServerMessageTypes(object):
@@ -224,13 +224,10 @@ class Bot(Thread):
 		field.update(message, self.index)
 
 		logging.debug("{} I am in state {}".format(self.name, self.state))
+		logging.info("{} Kill points: {}".format(self.name, self.kill_counter))
 
 		if self.state == Bot.CIRCLE:
-			if self.X**2 + self.Y**2 >= 40**2:
-				logging.info("Moving to the centre")
-				self.moveTo(0, 0)
-			else:
-				self.goCircle(0, -70, 30)
+			self.goCircle(0, -70, 20)
 			
 		if self.state == Bot.AMMO_PICKUP:
 			if self.hooked_objective and type(self.hooked_objective) == type(tuple()):
@@ -257,14 +254,11 @@ class Bot(Thread):
 		self.i += 1
 	
 	def execute_next_turret(self):
-		logging.info("Turret state {}".format(self.hookup_state))
-		logging.info("No of ammos: {}".format(self.ammo))
+		logging.debug("Turret state {}".format(self.hookup_state))
+		logging.debug("No of ammos: {}".format(self.ammo))
 
 		if self.hookup_state == Bot.RADAR:
 			self.radarTurret()
-
-			if self.state != Bot.CIRCLE:
-				return
 
 			if self.ammo == 0:
 				logging.info("Run out of ammo")
@@ -283,7 +277,7 @@ class Bot(Thread):
 				if len(field.enemies):
 					logging.info("Looking for an enemy...")
 					closest_enemy = min(field.enemies.keys(), key=lambda x: distance(self.X, self.Y, field.enemies[x][0], field.enemies[x][1]))
-					x_enemy, y_enemy, last_time = field.enemies[closest_enemy]
+					x_enemy, y_enemy = field.enemies[closest_enemy][:2]
 					if distance(self.X, self.Y, x_enemy, y_enemy) < 70:
 						logging.info("Hooked an enemy! {}".format(closest_enemy))
 						self.hooked_objective = closest_enemy
@@ -296,18 +290,19 @@ class Bot(Thread):
 				if self.hooked_objective == None or self.hooked_objective not in field.enemies:
 					self.unhook()
 				else:
-					x_enemy, y_enemy, last_time = field.enemies[self.hooked_objective]
+					x_enemy, y_enemy = field.enemies[self.hooked_objective][:2]
 					if distance(self.X, self.Y, x_enemy, y_enemy) > 80:
 						self.unhook()
 					else:
-						self.rotateTurretTo(x_enemy, y_enemy)
-						self.shoot()
+						self.rotateToShoot()
+						#self.rotateTurretTo(x_enemy, y_enemy)
+						self.fire()
 		
 		if self.hookup_state == Bot.HOOKED_SNITCH:
 			if field.snitch:
 				self.hooked_objective = field.snitch
-				x_enemy, y_enemy = field.snitch
-				self.rotateTurretTo(x_enemy, y_enemy)
+				x_snitch, y_snitch = field.snitch
+				self.rotateTurretTo(x_snitch, y_snitch)
 			else:
 				self.radarTurret()
 				
@@ -320,7 +315,26 @@ class Bot(Thread):
 	def radarTurret(self):
 		self.sendMessage(ServerMessageTypes.TOGGLETURRETLEFT, {'Amount': (self.turret_heading + 60) % 360})
 
-	def shoot(self):
+	def rotateToShoot(self):
+		if self.hooked_objective:
+			new_x = self.X + math.cos(deg2rad(self.heading))*2
+			new_y = self.Y + math.sin(deg2rad(self.heading))*2
+
+
+			x_enemy, y_enemy, _, heading_enemy = field.enemies[self.hooked_objective][:4]
+
+			logging.info("{} Objective: {} {}".format(self.name, x_enemy, y_enemy))
+
+			x_enemy2 = x_enemy + math.cos(deg2rad(heading_enemy))*2
+			y_enemy2 = y_enemy + math.sin(deg2rad(heading_enemy))*2
+
+			degree = rotate_head(new_x, new_y, x_enemy2, y_enemy2)
+			degree = (-degree) % 360
+			logging.info("{} OOOOOOOOOOOOOOOOOOO {} {}".format(self.name, x_enemy, x_enemy2))
+
+			self.sendMessage(ServerMessageTypes.TURNTURRETTOHEADING, {'Amount': degree})
+
+	def fire(self):
 		self.sendMessage(ServerMessageTypes.FIRE)
 
 	def goCircle(self, rootX, rootY, radius=40, speed=1):
@@ -370,7 +384,7 @@ class Bot(Thread):
 		self.hooked_objective = carrier
 	
 	def goBanking(self):
-		self.unhook()
+		#self.unhook()
 		self.changeState(Bot.BANKING)
 		
 	   
@@ -420,7 +434,7 @@ class Field(Thread):
 					if health == 0 and elem_id in self.enemies:
 						del self.enemies[elem_id]
 					else:
-						self.enemies[elem_id] = (x, y, time.time())
+						self.enemies[elem_id] = (x, y, time.time(), heading, turret_heading, health, ammo)
 			elif event['Type'] == 'HealthPickup':
 				self.health_pickups.append((event['X'], event['Y'], time.time()))
 
@@ -451,7 +465,6 @@ class Field(Thread):
 				seekers = bots.sort(key=lambda x: math.hypot(x.X, x.Y, carrier_data[0], carrier_data[1]))
 				seekers[0].snitchSeeker(carrier)
 				seekers[1].snitchSeeker(carrier)
-			
 			else:
 				carrier_bot = id2bot_no[carrier]
 				bots[carrier_bot].goBanking()
@@ -505,7 +518,7 @@ field.start()
 bots = []
 id2bot_no = {}
 
-for i in range(4):
+for i in range(1):
 	bots.append(Bot(args.hostname, args.port, args.name, i))
 
 # Main loop - read game messages, ignore them and randomly perform actions

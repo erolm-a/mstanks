@@ -397,6 +397,7 @@ class Field(Thread):
 		self.ammo_pickups = []
 		self.health_pickups = []
 		self.is_running = True
+		self.snitch_owner = None
 
 	def run(self):
 		while self.is_running:
@@ -409,7 +410,7 @@ class Field(Thread):
 				del self.enemies[x]
 			to_delete.clear()
 			
-			self.ammo_pickups = list(filter(lambda x: time.time() - x[2] <= 15, self.ammo_pickups))
+			self.ammo_pickups = list(filter(lambda x: time.time() - x[2] <= 5, self.ammo_pickups))
 
 	def kill(self):
 		self.is_running = False
@@ -435,6 +436,11 @@ class Field(Thread):
 						del self.enemies[elem_id]
 					else:
 						self.enemies[elem_id] = (x, y, time.time(), heading, turret_heading, health, ammo)
+				
+					if elem_id == self.snitch_owner and health == 0:
+						snitch_owner = None
+						self.snitchAppears()
+
 			elif event['Type'] == 'HealthPickup':
 				self.health_pickups.append((event['X'], event['Y'], time.time()))
 
@@ -446,7 +452,8 @@ class Field(Thread):
 		elif messageType == ServerMessageTypes.AMMOPICKUP:
 			logging.info("Grabbed object")
 			bots[index].ammo = 10
-			bots[index].changeState(Bot.CIRCLE)
+			if bots[index].state == Bot.AMMO_PICKUP:
+				bots[index].changeState(Bot.CIRCLE)
 			bots[index].hooked_objective = None
 
 			to_delete_pickups = []
@@ -458,17 +465,9 @@ class Field(Thread):
 				self.ammo_pickups.remove(to_delete)
 		
 		elif messageType == ServerMessageTypes.SNITCHPICKUP:
-			carrier = event['Id']
+			self.snitch_owner = event['Id']
+			self.assignCarrier()
 			# if I know this enemy then assign this task to the 2 closest bots
-			if carrier in self.enemies:
-				carrier_data = self.enemies[carrier]
-				seekers = bots.sort(key=lambda x: math.hypot(x.X, x.Y, carrier_data[0], carrier_data[1]))
-				seekers[0].snitchSeeker(carrier)
-				seekers[1].snitchSeeker(carrier)
-			else:
-				carrier_bot = id2bot_no[carrier]
-				bots[carrier_bot].goBanking()
-
 
 		elif messageType == ServerMessageTypes.ENTEREDGOAL:
 			bots[index].changeState(Bot.CIRCLE)
@@ -491,6 +490,29 @@ class Field(Thread):
 		elif messageType == ServerMessageTypes.DESTROYED:
 			logging.info("Bot {} has died!".format(bots[index].name))
 			bots[index].reset()
+			if self.snitch_owner:
+				self.assignCarrier()
+
+			elif self.snitch:
+				self.snitchAppears()
+
+	def snitchAppears(self):
+		best_healthy_bots = sorted(bots, key=lambda x: x.health, reverse=True)
+		best_healthy_bots[0].changeState(Bot.SEEK_SNITCH)
+		best_healthy_bots[1].changeState(Bot.SEEK_SNITCH)
+
+	def assignCarrier(self):
+		if self.snitch_owner in self.enemies:
+			carrier_data = self.enemies[self.snitch_owner]
+			seekers = sorted(bots, key=lambda x: math.hypot(x.X - carrier_data[0], x.Y - carrier_data[1]))
+			seekers[0].snitchSeeker(self.snitch_owner)
+			seekers[1].snitchSeeker(self.snitch_owner)
+		else:
+			carrier_bot = id2bot_no[self.snitch_owner]
+			bots[carrier_bot].goBanking()
+
+
+
 
 # Parse command line args
 parser = argparse.ArgumentParser()
